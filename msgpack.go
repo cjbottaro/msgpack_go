@@ -54,8 +54,6 @@ func RegisterExt(v any, typeId byte, marshalFn ExtMarshalFn, unmarshalFn ExtUnma
 		t = t.Elem()
 	}
 
-	fmt.Printf("t: %v\n", t)
-
 	_extRegistryByType[t] = extHandler{
 		typeId:      typeId,
 		marshalFn:   marshalFn,

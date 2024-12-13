@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/cjbottaro/msgpack"
+	msgpack "github.com/cjbottaro/msgpack_go"
 	"github.com/stretchr/testify/require"
 )
 

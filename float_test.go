@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/cjbottaro/msgpack"
+	msgpack "github.com/cjbottaro/msgpack_go"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cjbottaro/msgpack"
+	msgpack "github.com/cjbottaro/msgpack_go"
 )
 
 type Atom string
@@ -23,14 +23,38 @@ func init() {
 		},
 	)
 
-	// msgpack.RegisterExt((*Date)(nil), 0x02,
-	// 	func(rv reflect.Value) ([]byte, error) {
-	// 		return []byte(rv.Interface().(Atom)), nil
-	// 	},
-	// 	func(buf []byte) (any, error) {
-	// 		return Atom(buf), nil
-	// 	},
-	// )
+	msgpack.RegisterExt((*Date)(nil), 0x02,
+		func(v any) ([]byte, error) {
+			t := time.Time(v.(Date))
+			year, month, day := t.Date()
+
+			if year < -16384 || year > 16383 {
+				return nil, fmt.Errorf("year of out of range")
+			}
+
+			val := (year << 9) | (int(month) << 5) | day
+
+			var enc [3]byte
+			enc[0] = byte((val >> 16) & 0xFF)
+			enc[1] = byte((val >> 8) & 0xFF)
+			enc[2] = byte(val & 0xFF)
+
+			return enc[:], nil
+		},
+		func(buf []byte) (any, error) {
+			if len(buf) != 3 {
+				return nil, fmt.Errorf("invalid length for date ext data")
+			}
+			val := (int(buf[0]) << 16) | (int(buf[1]) << 8) | int(buf[2])
+
+			year := ((val >> 9) & 0x7FFF)
+			month := (val >> 5) & 0xF
+			day := val & 0x1F
+
+			t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+			return Date(t), nil
+		},
+	)
 }
 
 func TestAtom(t *testing.T) {
@@ -143,6 +167,57 @@ func TestAtomNested(t *testing.T) {
 		if !reflect.DeepEqual(expected, s) {
 			fmt.Printf("expected: %+v\n", expected)
 			fmt.Printf("  actual: %+v\n", s)
+			t.FailNow()
+		}
+	}
+}
+
+func TestDate(t *testing.T) {
+	// ~D[2024-12-01] packed by Elixir
+	data := []byte("\xC7\x03\x02\x0Fс")
+	expected, err := time.Parse("2006-01-02", "2024-12-01")
+	if err != nil {
+		panic(err)
+	}
+
+	{
+		var v any
+		err = msgpack.Unmarshal(data, &v)
+		if err != nil {
+			panic(err)
+		}
+
+		if v.(Date) != Date(expected) {
+			fmt.Printf("expected: %v\n", expected)
+			fmt.Printf("  actual: %v\n", time.Time(v.(Date)))
+			t.FailNow()
+		}
+	}
+
+	{
+		var d Date
+		err = msgpack.Unmarshal(data, &d)
+		if err != nil {
+			panic(err)
+		}
+
+		if d != Date(expected) {
+			fmt.Printf("expected: %v\n", expected)
+			fmt.Printf("  actual: %v\n", time.Time(d))
+			t.FailNow()
+		}
+	}
+
+	{
+		var p *Date
+		err = msgpack.Unmarshal(data, &p)
+		if err != nil {
+			panic(err)
+		}
+
+		if *p != Date(expected) {
+			fmt.Printf("expected: %v\n", expected)
+			fmt.Printf("  actual: %v\n", time.Time(*p))
 			t.FailNow()
 		}
 	}
