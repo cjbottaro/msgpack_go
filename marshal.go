@@ -53,7 +53,7 @@ func marshalNil(_ reflect.Value, buf *bytes.Buffer) error {
 
 func marshalExt(rv reflect.Value, handler extHandler, buf *bytes.Buffer) error {
 	// Use the custom marshal function to get the data
-	data, err := handler.marshalFn(rv)
+	data, err := handler.marshalFn(rv.Interface())
 	if err != nil {
 		return err
 	}

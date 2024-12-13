@@ -9,10 +9,11 @@ import (
 var (
 	_extRegistryByType = make(map[reflect.Type]extHandler)
 	_extRegistryById   = make(map[byte]extHandler)
+	_anyType           = reflect.TypeOf((*any)(nil)).Elem()
 )
 
-type ExtMarshalFn func(reflect.Value) ([]byte, error)
-type ExtUnmarshalFn func([]byte, any) error
+type ExtMarshalFn func(any) ([]byte, error)
+type ExtUnmarshalFn func([]byte) (any, error)
 
 type extHandler struct {
 	typeId      byte
@@ -52,6 +53,8 @@ func RegisterExt(v any, typeId byte, marshalFn ExtMarshalFn, unmarshalFn ExtUnma
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
+
+	fmt.Printf("t: %v\n", t)
 
 	_extRegistryByType[t] = extHandler{
 		typeId:      typeId,

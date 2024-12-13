@@ -3,7 +3,6 @@ package msgpack
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -55,7 +54,7 @@ func unmarshalAny(rv reflect.Value, reader *bytes.Reader) error {
 		return unmarshalFloat32(b, rv, reader)
 	case b == 0xcb:
 		return unmarshalFloat64(b, rv, reader)
-	case (b & 0b10100000) == 0b10100000:
+	case (b & 0b11100000) == 0b10100000:
 		return unmarshalStrFix(b, rv, reader)
 	case b == 0xd9:
 		return unmarshalStr8(b, rv, reader)
@@ -69,20 +68,32 @@ func unmarshalAny(rv reflect.Value, reader *bytes.Reader) error {
 		return unmarshalBin16(b, rv, reader)
 	case b == 0xc6:
 		return unmarshalBin32(b, rv, reader)
-	case (b & 0b10010000) == 0b10010000:
+	case (b & 0b11110000) == 0b10010000:
 		return unmarshalArrayFix(b, rv, reader)
 	case b == 0xdc:
 		return unmarshalArray16(b, rv, reader)
 	case b == 0xdd:
 		return unmarshalArray32(b, rv, reader)
-	case (b & 0b10000000) == 0b10000000:
+	case (b & 0b11110000) == 0b10000000:
 		return unmarshalMapFix(b, rv, reader)
 	case b == 0xde:
 		return unmarshalMap16(b, rv, reader)
 	case b == 0xdf:
 		return unmarshalMap32(b, rv, reader)
+	case b == 0xd4:
+		return unmarshalExtFix1(b, rv, reader)
+	case b == 0xd5:
+		return unmarshalExtFix2(b, rv, reader)
+	case b == 0xd6:
+		return unmarshalExtFix4(b, rv, reader)
+	case b == 0xd7:
+		return unmarshalExtFix8(b, rv, reader)
+	case b == 0xd8:
+		return unmarshalExtFix16(b, rv, reader)
+	case b == 0xc7:
+		return unmarshalExt8(b, rv, reader)
 	default:
-		return errors.New("unknown msgpack type")
+		return fmt.Errorf("msgpack: unknown type: 0x%x", b)
 	}
 }
 
@@ -244,15 +255,20 @@ func unmarshalUint(v uint64, rv reflect.Value) error {
 func unmarshalFloat32(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	var v float32
 
-	if err := checkFloat(rv); err != nil {
-		return err
-	}
+	// if err := checkFloat(rv); err != nil {
+	// 	return err
+	// }
 
 	if err := binary.Read(reader, binary.BigEndian, &v); err != nil {
 		return err
 	}
 
-	rv.SetFloat(float64(v))
+	if rv.Kind() == reflect.Interface && rv.NumMethod() == 0 {
+		// Allocate a float64 for the interface and set its value
+		rv.Set(reflect.ValueOf(float64(v)))
+	} else {
+		rv.SetFloat(float64(v))
+	}
 
 	return nil
 }
@@ -264,7 +280,12 @@ func unmarshalFloat64(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 		return err
 	}
 
-	rv.SetFloat(v)
+	if rv.Kind() == reflect.Interface && rv.NumMethod() == 0 {
+		// Allocate a float64 for the interface and set its value
+		rv.Set(reflect.ValueOf(v))
+	} else {
+		rv.SetFloat(v)
+	}
 
 	return nil
 }
@@ -313,12 +334,12 @@ func unmarshalStr32(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 }
 
 func unmarshalStr(length uint32, buf []byte, rv reflect.Value, reader *bytes.Reader) error {
-	if rv.Kind() != reflect.String {
+	if rv.Kind() != reflect.String && rv.Type() != _anyType {
 		return fmt.Errorf("msgpack: cannot unmarshal string into Go value of type %v", rv.Type())
 	}
 
 	if length == 0 {
-		rv.SetString("")
+		rv.Set(reflect.ValueOf(""))
 		return nil
 	}
 
@@ -334,7 +355,7 @@ func unmarshalStr(length uint32, buf []byte, rv reflect.Value, reader *bytes.Rea
 		return fmt.Errorf("msgpack: unable to read string data: %w", err)
 	}
 
-	rv.SetString(string(buf))
+	rv.Set(reflect.ValueOf(string(buf)))
 	return nil
 }
 
@@ -537,5 +558,91 @@ func unmarshalIntoStruct(length uint32, rv reflect.Value, reader *bytes.Reader) 
 		}
 	}
 
+	return nil
+}
+
+func unmarshalExtFix1(_ byte, rv reflect.Value, reader *bytes.Reader) error {
+	var buf [1]byte
+	return unmarshalExtFix(buf[:], rv, reader)
+}
+
+func unmarshalExtFix2(_ byte, rv reflect.Value, reader *bytes.Reader) error {
+	var buf [2]byte
+	return unmarshalExtFix(buf[:], rv, reader)
+}
+
+func unmarshalExtFix4(_ byte, rv reflect.Value, reader *bytes.Reader) error {
+	var buf [4]byte
+	return unmarshalExtFix(buf[:], rv, reader)
+}
+
+func unmarshalExtFix8(_ byte, rv reflect.Value, reader *bytes.Reader) error {
+	var buf [8]byte
+	return unmarshalExtFix(buf[:], rv, reader)
+}
+
+func unmarshalExtFix16(_ byte, rv reflect.Value, reader *bytes.Reader) error {
+	var buf [16]byte
+	return unmarshalExtFix(buf[:], rv, reader)
+}
+
+func unmarshalExtFix(buf []byte, rv reflect.Value, reader *bytes.Reader) error {
+	id, err := reader.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	handler, ok := _extRegistryById[id]
+	if !ok {
+		return fmt.Errorf("msgpack: unregistered ext: 0x%x", id)
+	}
+
+	_, err = io.ReadFull(reader, buf)
+	if err != nil {
+		return err
+	}
+
+	v, err := handler.unmarshalFn(buf[:])
+	if err != nil {
+		return err
+	}
+
+	rv.Set(reflect.ValueOf(v))
+	return nil
+}
+
+func unmarshalExt8(_ byte, rv reflect.Value, reader *bytes.Reader) error {
+	var size uint8
+	if err := binary.Read(reader, binary.BigEndian, &size); err != nil {
+		return err
+	}
+
+	id, err := reader.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	handler, ok := _extRegistryById[id]
+	if !ok {
+		return fmt.Errorf("msgpack: unregistered ext: 0x%x", id)
+	}
+
+	buf := make([]byte, size)
+	_, err = io.ReadFull(reader, buf)
+	if err != nil {
+		return err
+	}
+
+	v, err := handler.unmarshalFn(buf)
+	if err != nil {
+		return err
+	}
+
+	vt := rv.Type()
+	if vt != _anyType && vt != reflect.TypeOf(v) {
+		return fmt.Errorf("msgpack: cannot unmarshal %v into Go value of type %v", reflect.TypeOf(v), vt)
+	}
+
+	rv.Set(reflect.ValueOf(v))
 	return nil
 }
