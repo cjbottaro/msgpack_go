@@ -84,7 +84,7 @@ func marshalExt(rv reflect.Value, handler extHandler, buf *bytes.Buffer) error {
 	}
 
 	// Write type identifier
-	buf.WriteByte(handler.typeId)
+	buf.WriteByte(byte(handler.typeId))
 
 	// Write the serialized data
 	_, err = buf.Write(data)

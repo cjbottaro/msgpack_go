@@ -592,7 +592,7 @@ func unmarshalExtFix(buf []byte, rv reflect.Value, reader *bytes.Reader) error {
 		return err
 	}
 
-	handler, ok := _extRegistryById[id]
+	handler, ok := _extRegistryById[int8(id)]
 	if !ok {
 		return fmt.Errorf("msgpack: unregistered ext: 0x%x", id)
 	}
@@ -616,13 +616,32 @@ func unmarshalExt8(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	if err := binary.Read(reader, binary.BigEndian, &size); err != nil {
 		return err
 	}
+	return unmarshalExt(uint32(size), rv, reader)
+}
 
+func unmarshalExt16(_ byte, rv reflect.Value, reader *bytes.Reader) error {
+	var size uint16
+	if err := binary.Read(reader, binary.BigEndian, &size); err != nil {
+		return err
+	}
+	return unmarshalExt(uint32(size), rv, reader)
+}
+
+func unmarshalExt32(_ byte, rv reflect.Value, reader *bytes.Reader) error {
+	var size uint32
+	if err := binary.Read(reader, binary.BigEndian, &size); err != nil {
+		return err
+	}
+	return unmarshalExt(size, rv, reader)
+}
+
+func unmarshalExt(size uint32, rv reflect.Value, reader *bytes.Reader) error {
 	id, err := reader.ReadByte()
 	if err != nil {
 		return err
 	}
 
-	handler, ok := _extRegistryById[id]
+	handler, ok := _extRegistryById[int8(id)]
 	if !ok {
 		return fmt.Errorf("msgpack: unregistered ext: 0x%x", id)
 	}
