@@ -192,5 +192,5 @@ func TestUnmarshalFloatIntoWrongType(t *testing.T) {
 
 	v = i
 	err = msgpack.Unmarshal(data, &v)
-	assert.EqualError(t, err, "msgpack: cannot assign float to unaddressable value")
+	assert.EqualError(t, err, "msgpack: cannot unmarshal float to unaddressable value")
 }

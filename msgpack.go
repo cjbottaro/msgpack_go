@@ -13,7 +13,6 @@ var (
 	_extRegistryByType = make(map[reflect.Type]extHandler)
 	_extRegistryById   = make(map[int8]extHandler)
 	_anyType           = reflect.TypeOf((*any)(nil)).Elem()
-	_anyMapType        = reflect.TypeOf(map[any]any{})
 )
 
 type ExtMarshalFn func(any) ([]byte, error)
