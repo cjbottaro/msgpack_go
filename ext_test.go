@@ -14,6 +14,8 @@ type Atom string
 type Date time.Time
 
 func init() {
+	msgpack.RegisterExt((*time.Time)(nil), -0x01, msgpack.MarshalTimeExt, msgpack.UnmarshalTimeExt)
+
 	msgpack.RegisterExt((*Atom)(nil), 0x01,
 		func(v any) ([]byte, error) {
 			return []byte(v.(Atom)), nil
@@ -55,6 +57,48 @@ func init() {
 			return Date(t), nil
 		},
 	)
+}
+
+func TestTime(test *testing.T) {
+	// ~U[2024-11-25 02:19:12.033203Z] packed by Elixir
+	data := []byte("\xD7\xFF\a\xEA\x8C\xE0gCޠ")
+	expected, err := time.Parse("2006-01-02T15:04:05.000000Z", "2024-11-25T02:19:12.033203Z")
+	if err != nil {
+		panic(err)
+	}
+
+	d, err := msgpack.Marshal(expected)
+	if err != nil {
+		panic(err)
+	}
+
+	if !reflect.DeepEqual(data, d) {
+		fmt.Printf("expected: %v\n", data)
+		fmt.Printf("  actual: %v\n", d)
+		test.FailNow()
+	}
+
+	var v any
+	if err := msgpack.Unmarshal(data, &v); err != nil {
+		panic(err)
+	}
+
+	if !reflect.DeepEqual(expected, v) {
+		fmt.Printf("expected: %v\n", expected)
+		fmt.Printf("  actual: %v\n", v)
+		test.FailNow()
+	}
+
+	var t time.Time
+	if err := msgpack.Unmarshal(data, &t); err != nil {
+		panic(err)
+	}
+
+	if !reflect.DeepEqual(expected, t) {
+		fmt.Printf("expected: %v\n", expected)
+		fmt.Printf("  actual: %v\n", t)
+		test.FailNow()
+	}
 }
 
 func TestAtom(t *testing.T) {
@@ -220,5 +264,64 @@ func TestDate(t *testing.T) {
 			fmt.Printf("  actual: %v\n", time.Time(*p))
 			t.FailNow()
 		}
+	}
+}
+
+func TestComplexMap(test *testing.T) {
+	data1 := []byte("\x85\x01\xA3one\xD6\x01list\x93\xA3one\x02\xCB@\t\x1E\xB8Q\xEB\x85\x1F\xC7\x06\x01nested\x82\xD6\x01date\xC7\x03\x02\x0Fс\xD6\x01time\xD7\xFF\a\xEA\x8C\xE0gCޠ\xC7\x03\x01two\x02\xA3pie\xCB@\t\x1E\xB8Q\xEB\x85\x1F")
+
+	timeVal, err := time.Parse("2006-01-02T15:04:05.000000Z", "2024-11-25T02:19:12.033203Z")
+	if err != nil {
+		panic(err)
+	}
+
+	dateVal, err := time.Parse("2006-01-02", "2024-12-01")
+	if err != nil {
+		panic(err)
+	}
+
+	expected := map[any]any{
+		1:            "one",
+		Atom("two"):  2,
+		"pie":        3.14,
+		Atom("list"): []any{"one", 2, 3.14},
+		Atom("nested"): map[any]any{
+			Atom("time"): timeVal,
+			Atom("date"): Date(dateVal),
+		},
+	}
+
+	data2, err := msgpack.Marshal(&expected)
+	if err != nil {
+		panic(err)
+	}
+
+	// We can't check to see if data1 and data2 are the same because map key
+	// sorting difference between Elixir and Go.
+
+	var actual1 any
+	if err := msgpack.Unmarshal(data1, &actual1); err != nil {
+		panic(err)
+	}
+
+	var actual2 any
+	if err := msgpack.Unmarshal(data2, &actual2); err != nil {
+		panic(err)
+	}
+
+	expectedStr := fmt.Sprintf("%+v", expected)
+
+	actualStr := fmt.Sprintf("%+v", actual1)
+	if expectedStr != actualStr {
+		fmt.Printf("expected: %s\n", expectedStr)
+		fmt.Printf("  actual: %s\n", actualStr)
+		test.FailNow()
+	}
+
+	actualStr = fmt.Sprintf("%+v", actual2)
+	if expectedStr != actualStr {
+		fmt.Printf("expected: %s\n", expectedStr)
+		fmt.Printf("  actual: %s\n", actualStr)
+		test.FailNow()
 	}
 }

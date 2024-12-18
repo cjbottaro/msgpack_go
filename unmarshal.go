@@ -15,16 +15,9 @@ func unmarshalAny(rv reflect.Value, reader *bytes.Reader) error {
 		return err
 	}
 
-	// Handle pointers
-	if rv.Kind() == reflect.Pointer {
-		if b == 0xc0 {
-			rv.SetZero()
-			return nil
-		}
-		if rv.IsNil() {
-			rv.Set(reflect.New(rv.Type().Elem())) // Allocate memory for the pointer
-		}
-		rv = rv.Elem() // Dereference to actual value
+	rv, done := derefPointersAndInterfaces(rv, b)
+	if done {
+		return nil
 	}
 
 	switch {
@@ -92,8 +85,49 @@ func unmarshalAny(rv reflect.Value, reader *bytes.Reader) error {
 		return unmarshalExtFix16(b, rv, reader)
 	case b == 0xc7:
 		return unmarshalExt8(b, rv, reader)
+	case b == 0xc8:
+		return unmarshalExt16(b, rv, reader)
+	case b == 0xc9:
+		return unmarshalExt32(b, rv, reader)
 	default:
 		return fmt.Errorf("msgpack: unknown type: 0x%x", b)
+	}
+}
+
+func derefPointersAndInterfaces(rv reflect.Value, b byte) (reflect.Value, bool) {
+	for {
+		// Handle pointers: allocate memory if nil and dereference
+		if rv.Kind() == reflect.Pointer {
+			if b == 0xc0 {
+				rv.SetZero()
+				return rv, true
+			}
+			if rv.IsNil() {
+				rv.Set(reflect.New(rv.Type().Elem()))
+			}
+			rv = rv.Elem()
+			continue
+		}
+
+		// Handle interfaces: unwrap the value inside the interface
+		if rv.Kind() == reflect.Interface {
+			if b == 0xc0 {
+				rv.SetZero()
+				return rv, true
+			}
+			if !rv.IsNil() {
+				innerValue := rv.Elem() // Retrieve the actual value inside the interface
+				if innerValue.Kind() == reflect.Pointer && !innerValue.IsNil() {
+					rv = innerValue.Elem() // Properly dereference without losing addressability
+				} else {
+					rv = innerValue // Keep the value as-is
+				}
+				continue
+			}
+		}
+
+		// Base case: rv is no longer a pointer or interface
+		return rv, false
 	}
 }
 
@@ -177,6 +211,10 @@ func unmarshalInt(v int64, rv reflect.Value) error {
 			return fmt.Errorf("msgpack: integer %d overflows Go type %v", v, rv.Type())
 		}
 		rv.SetUint(uint64(v))
+	case reflect.Interface:
+		if rv.Type() == _anyType {
+			rv.Set(reflect.ValueOf(v))
+		}
 	default:
 		return fmt.Errorf("msgpack: cannot unmarshal integer into Go value of type %v", rv.Type())
 	}
@@ -188,7 +226,7 @@ func unmarshalUint8(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	if err := binary.Read(reader, binary.BigEndian, &n); err != nil {
 		return err
 	}
-	return unmarshalUint(uint64(n), rv)
+	return setUint(uint64(n), rv)
 }
 
 func unmarshalUint16(_ byte, rv reflect.Value, reader *bytes.Reader) error {
@@ -196,7 +234,7 @@ func unmarshalUint16(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	if err := binary.Read(reader, binary.BigEndian, &n); err != nil {
 		return err
 	}
-	return unmarshalUint(uint64(n), rv)
+	return setUint(uint64(n), rv)
 }
 
 func unmarshalUint32(_ byte, rv reflect.Value, reader *bytes.Reader) error {
@@ -204,7 +242,7 @@ func unmarshalUint32(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	if err := binary.Read(reader, binary.BigEndian, &n); err != nil {
 		return err
 	}
-	return unmarshalUint(uint64(n), rv)
+	return setUint(uint64(n), rv)
 }
 
 func unmarshalUint64(_ byte, rv reflect.Value, reader *bytes.Reader) error {
@@ -212,91 +250,63 @@ func unmarshalUint64(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	if err := binary.Read(reader, binary.BigEndian, &n); err != nil {
 		return err
 	}
-	return unmarshalUint(n, rv)
+	return setUint(n, rv)
 }
 
-func unmarshalUint(v uint64, rv reflect.Value) error {
-	switch rv.Kind() {
-	case reflect.Uint:
-		if v > uint64(^uint(0)) { // Max value of uint
-			return fmt.Errorf("msgpack: unsigned integer %d overflows Go type %v", v, rv.Type())
-		}
-		rv.SetUint(v)
-	case reflect.Uint8:
-		if v > uint64(^uint8(0)) { // Max value of uint8
-			return fmt.Errorf("msgpack: unsigned integer %d overflows Go type %v", v, rv.Type())
-		}
-		rv.SetUint(v)
-	case reflect.Uint16:
-		if v > uint64(^uint16(0)) { // Max value of uint16
-			return fmt.Errorf("msgpack: unsigned integer %d overflows Go type %v", v, rv.Type())
-		}
-		rv.SetUint(v)
-	case reflect.Uint32:
-		if v > uint64(^uint32(0)) { // Max value of uint32
-			return fmt.Errorf("msgpack: unsigned integer %d overflows Go type %v", v, rv.Type())
-		}
-		rv.SetUint(v)
-	case reflect.Uint64:
-		rv.SetUint(v) // uint64 can hold any uint64 value
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		// Check if the unsigned value can fit into the signed integer type
-		max := int64(^uint64(0) >> 1) // Max signed int64
-		if v > uint64(max) {
-			return fmt.Errorf("msgpack: unsigned integer %d overflows Go type %v", v, rv.Type())
-		}
-		rv.SetInt(int64(v))
-	default:
-		return fmt.Errorf("msgpack: cannot unmarshal unsigned integer into Go value of type %v", rv.Type())
+func setUint(v uint64, rv reflect.Value) error {
+	if !rv.CanSet() {
+		return fmt.Errorf("msgpack: cannot assign float to unaddressable value")
 	}
+
+	if rv.Kind() == reflect.Interface {
+		rv.Set(reflect.ValueOf(v))
+		return nil
+	}
+
+	if rv.OverflowUint(v) {
+		return fmt.Errorf("msgpack: unsigned integer overflows Go type %v", rv.Type())
+	}
+
+	rv.SetUint(v)
 	return nil
 }
 
 func unmarshalFloat32(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	var v float32
-
-	// if err := checkFloat(rv); err != nil {
-	// 	return err
-	// }
-
 	if err := binary.Read(reader, binary.BigEndian, &v); err != nil {
 		return err
 	}
-
-	if rv.Kind() == reflect.Interface && rv.NumMethod() == 0 {
-		// Allocate a float64 for the interface and set its value
-		rv.Set(reflect.ValueOf(float64(v)))
-	} else {
-		rv.SetFloat(float64(v))
-	}
-
-	return nil
+	return setFloat(float64(v), rv)
 }
 
 func unmarshalFloat64(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	var v float64
-
 	if err := binary.Read(reader, binary.BigEndian, &v); err != nil {
 		return err
 	}
-
-	if rv.Kind() == reflect.Interface && rv.NumMethod() == 0 {
-		// Allocate a float64 for the interface and set its value
-		rv.Set(reflect.ValueOf(v))
-	} else {
-		rv.SetFloat(v)
-	}
-
-	return nil
+	return setFloat(float64(v), rv)
 }
 
-func checkFloat(rv reflect.Value) error {
-	switch rv.Kind() {
-	case reflect.Float32, reflect.Float64:
-		return nil
-	default:
-		return fmt.Errorf("msgpack: cannot unmarshal float into Go value of type %v", rv.Type())
+func setFloat(f float64, output reflect.Value) error {
+	if !output.CanSet() {
+		return fmt.Errorf("msgpack: cannot assign float to unaddressable value")
 	}
+
+	if output.Kind() == reflect.Interface {
+		output.Set(reflect.ValueOf(f))
+		return nil
+	}
+
+	if !output.CanFloat() {
+		return fmt.Errorf("msgpack: cannot unmarshal float into Go type of %v", output.Type())
+	}
+
+	if output.OverflowFloat(f) {
+		return fmt.Errorf("msgpack: float value %f overflows float32", f)
+	}
+
+	output.SetFloat(f)
+	return nil
 }
 
 func unmarshalStrFix(b byte, rv reflect.Value, reader *bytes.Reader) error {
@@ -429,22 +439,32 @@ func unmarshalArray32(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 }
 
 func unmarshalArray(length uint32, rv reflect.Value, reader *bytes.Reader) error {
-	if rv.Kind() != reflect.Slice {
+	var rva reflect.Value = rv
+	if rv.Type() == _anyType {
+		v := make([]any, length)         // Create a slice with the desired length
+		rva = reflect.ValueOf(&v).Elem() // Create an addressable value
+	}
+
+	if rva.Kind() != reflect.Slice {
 		return fmt.Errorf("msgpack: cannot unmarshal array into Go value of type %v", rv.Type())
 	}
 
 	// Ensure the slice has enough capacity
-	if rv.IsNil() || rv.Cap() < int(length) {
-		rv.Set(reflect.MakeSlice(rv.Type(), int(length), int(length)))
+	if rva.IsNil() || rva.Cap() < int(length) {
+		fmt.Printf("rva.Type(): %v\n", rva.Type())
+
+		rva.Set(reflect.MakeSlice(rva.Type(), int(length), int(length)))
 	} else {
-		rv.SetLen(int(length)) // Adjust length without reallocation
+		rva.SetLen(int(length)) // Adjust length without reallocation
 	}
 
 	for i := 0; i < int(length); i++ {
-		if err := unmarshalAny(rv.Index(i), reader); err != nil {
+		if err := unmarshalAny(rva.Index(i), reader); err != nil {
 			return fmt.Errorf("msgpack: unable to unmarshal array element %d: %w", i, err)
 		}
 	}
+
+	rv.Set(rva)
 
 	return nil
 }
@@ -479,10 +499,10 @@ func unmarshalMap(length uint32, rv reflect.Value, reader *bytes.Reader) error {
 		rv = rv.Elem()
 	}
 
-	switch rv.Kind() {
-	case reflect.Map:
+	switch {
+	case rv.Type() == _anyType || rv.Kind() == reflect.Map:
 		return unmarshalIntoMap(length, rv, reader)
-	case reflect.Struct:
+	case rv.Kind() == reflect.Struct:
 		return unmarshalIntoStruct(length, rv, reader)
 	default:
 		return fmt.Errorf("msgpack: cannot unmarshal map into Go value of type %v", rv.Type())
@@ -490,13 +510,17 @@ func unmarshalMap(length uint32, rv reflect.Value, reader *bytes.Reader) error {
 }
 
 func unmarshalIntoMap(length uint32, rv reflect.Value, reader *bytes.Reader) error {
-	// Ensure map is initialized
-	if rv.IsNil() {
-		rv.Set(reflect.MakeMap(rv.Type()))
+	var rvm reflect.Value = rv
+
+	if rvm.Type() == _anyType {
+		v := map[any]any{}
+		rvm = reflect.ValueOf(&v).Elem()
+	} else if rvm.IsNil() {
+		rvm.Set(reflect.MakeMap(rvm.Type()))
 	}
 
-	keyType := rv.Type().Key()
-	valueType := rv.Type().Elem()
+	keyType := rvm.Type().Key()
+	valueType := rvm.Type().Elem()
 
 	for i := uint32(0); i < length; i++ {
 		// Unmarshal key
@@ -512,9 +536,10 @@ func unmarshalIntoMap(length uint32, rv reflect.Value, reader *bytes.Reader) err
 		}
 
 		// Set key-value pair in map
-		rv.SetMapIndex(key, value)
+		rvm.SetMapIndex(key, value)
 	}
 
+	rv.Set(rvm)
 	return nil
 }
 
