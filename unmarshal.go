@@ -593,52 +593,27 @@ func unmarshalIntoStruct(length uint32, rv reflect.Value, reader *bytes.Reader) 
 
 func unmarshalExtFix1(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	var buf [1]byte
-	return unmarshalExtFix(buf[:], rv, reader)
+	return unmarshalExt(buf[:], rv, reader)
 }
 
 func unmarshalExtFix2(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	var buf [2]byte
-	return unmarshalExtFix(buf[:], rv, reader)
+	return unmarshalExt(buf[:], rv, reader)
 }
 
 func unmarshalExtFix4(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	var buf [4]byte
-	return unmarshalExtFix(buf[:], rv, reader)
+	return unmarshalExt(buf[:], rv, reader)
 }
 
 func unmarshalExtFix8(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	var buf [8]byte
-	return unmarshalExtFix(buf[:], rv, reader)
+	return unmarshalExt(buf[:], rv, reader)
 }
 
 func unmarshalExtFix16(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	var buf [16]byte
-	return unmarshalExtFix(buf[:], rv, reader)
-}
-
-func unmarshalExtFix(buf []byte, rv reflect.Value, reader *bytes.Reader) error {
-	id, err := reader.ReadByte()
-	if err != nil {
-		return err
-	}
-
-	handler, ok := _extRegistryById[int8(id)]
-	if !ok {
-		return fmt.Errorf("msgpack: unregistered ext: 0x%x", id)
-	}
-
-	_, err = io.ReadFull(reader, buf)
-	if err != nil {
-		return err
-	}
-
-	v, err := handler.unmarshalFn(buf[:])
-	if err != nil {
-		return err
-	}
-
-	rv.Set(reflect.ValueOf(v))
-	return nil
+	return unmarshalExt(buf[:], rv, reader)
 }
 
 func unmarshalExt8(_ byte, rv reflect.Value, reader *bytes.Reader) error {
@@ -646,7 +621,7 @@ func unmarshalExt8(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	if err := binary.Read(reader, binary.BigEndian, &size); err != nil {
 		return err
 	}
-	return unmarshalExt(uint32(size), rv, reader)
+	return unmarshalExtSize(uint32(size), rv, reader)
 }
 
 func unmarshalExt16(_ byte, rv reflect.Value, reader *bytes.Reader) error {
@@ -654,7 +629,7 @@ func unmarshalExt16(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	if err := binary.Read(reader, binary.BigEndian, &size); err != nil {
 		return err
 	}
-	return unmarshalExt(uint32(size), rv, reader)
+	return unmarshalExtSize(uint32(size), rv, reader)
 }
 
 func unmarshalExt32(_ byte, rv reflect.Value, reader *bytes.Reader) error {
@@ -662,10 +637,14 @@ func unmarshalExt32(_ byte, rv reflect.Value, reader *bytes.Reader) error {
 	if err := binary.Read(reader, binary.BigEndian, &size); err != nil {
 		return err
 	}
-	return unmarshalExt(size, rv, reader)
+	return unmarshalExtSize(uint32(size), rv, reader)
 }
 
-func unmarshalExt(size uint32, rv reflect.Value, reader *bytes.Reader) error {
+func unmarshalExtSize(size uint32, rv reflect.Value, reader *bytes.Reader) error {
+	return unmarshalExt(make([]byte, size), rv, reader)
+}
+
+func unmarshalExt(buf []byte, rv reflect.Value, reader *bytes.Reader) error {
 	id, err := reader.ReadByte()
 	if err != nil {
 		return err
@@ -676,7 +655,6 @@ func unmarshalExt(size uint32, rv reflect.Value, reader *bytes.Reader) error {
 		return fmt.Errorf("msgpack: unregistered ext: 0x%x", id)
 	}
 
-	buf := make([]byte, size)
 	_, err = io.ReadFull(reader, buf)
 	if err != nil {
 		return err
@@ -687,11 +665,15 @@ func unmarshalExt(size uint32, rv reflect.Value, reader *bytes.Reader) error {
 		return err
 	}
 
-	vt := rv.Type()
-	if vt != _anyType && vt != reflect.TypeOf(v) {
-		return fmt.Errorf("msgpack: cannot unmarshal %v into Go value of type %v", reflect.TypeOf(v), vt)
+	rval := reflect.ValueOf(v)
+
+	if rv.Type() != rval.Type() {
+		if !rval.CanConvert(rv.Type()) {
+			return fmt.Errorf("msgpack: cannot unmarshal %v into Go value of type %v", rval.Type(), rv.Type())
+		}
+		rval = rval.Convert(rv.Type())
 	}
 
-	rv.Set(reflect.ValueOf(v))
+	rv.Set(rval)
 	return nil
 }

@@ -216,7 +216,7 @@ func TestAtomNested(t *testing.T) {
 	}
 }
 
-func TestDate(t *testing.T) {
+func TestDate(test *testing.T) {
 	// ~D[2024-12-01] packed by Elixir
 	data := []byte("\xC7\x03\x02\x0Fс")
 	expected, err := time.Parse("2006-01-02", "2024-12-01")
@@ -234,7 +234,7 @@ func TestDate(t *testing.T) {
 		if v.(Date) != Date(expected) {
 			fmt.Printf("expected: %v\n", expected)
 			fmt.Printf("  actual: %v\n", time.Time(v.(Date)))
-			t.FailNow()
+			test.FailNow()
 		}
 	}
 
@@ -248,7 +248,7 @@ func TestDate(t *testing.T) {
 		if d != Date(expected) {
 			fmt.Printf("expected: %v\n", expected)
 			fmt.Printf("  actual: %v\n", time.Time(d))
-			t.FailNow()
+			test.FailNow()
 		}
 	}
 
@@ -262,7 +262,20 @@ func TestDate(t *testing.T) {
 		if *p != Date(expected) {
 			fmt.Printf("expected: %v\n", expected)
 			fmt.Printf("  actual: %v\n", time.Time(*p))
-			t.FailNow()
+			test.FailNow()
+		}
+	}
+
+	{
+		var t time.Time
+		err = msgpack.Unmarshal(data, &t)
+		if err != nil {
+			panic(err)
+		}
+		if !expected.Equal(t) {
+			fmt.Printf("expected: %v\n", expected)
+			fmt.Printf("  actual: %v\n", t)
+			test.FailNow()
 		}
 	}
 }
